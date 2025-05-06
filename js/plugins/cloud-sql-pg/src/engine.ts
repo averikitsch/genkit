@@ -1,7 +1,7 @@
 import { AuthTypes, Connector, IpAddressTypes} from "@google-cloud/cloud-sql-connector";
 import { GoogleAuth } from "google-auth-library";
 import knex from "knex";
-import { getIAMPrincipalEmail } from "./utils/utils.js";
+import { getIAMPrincipalEmail } from "./utils";
 
 export interface PostgresEngineArgs {
   ipType?: IpAddressTypes,
@@ -135,6 +135,16 @@ export class PostgresEngine {
   }
 
   /**
+   * Create a PostgresEngine instance from an Knex instance.
+   *
+   * @param engine knex instance
+   * @returns PostgresEngine instance from a knex instance
+   */
+  static async fromEngine(engine: knex.Knex<any, any[]>) {
+    return new PostgresEngine(PostgresEngine._createKey, engine)
+  }
+
+  /**
    * Create a PostgresEngine instance from arguments.
    *
    * @param url URL use to connect to a database
@@ -236,5 +246,6 @@ export class PostgresEngine {
     return now;
   }
 }
+
 
 export default PostgresEngine;
