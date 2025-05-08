@@ -14,6 +14,9 @@
  * limitations under the License.
  */
 
+import { Genkit, z } from 'genkit';
+import { GenkitPlugin, genkitPlugin } from 'genkit/plugin';
+import { EmbedderArgument, Embedding } from 'genkit/embedder';
 import {
   CommonRetrieverOptionsSchema,
   Document,
@@ -21,18 +24,17 @@ import {
   retrieverRef,
 } from 'genkit/retriever';
 
-import { type Genkit, z } from 'genkit';
-import type { EmbedderArgument } from 'genkit/embedder';
-import { type GenkitPlugin, genkitPlugin } from 'genkit/plugin';
-import type { PostgresEngine } from './engine';
-import { DistanceStrategy, type QueryOptions } from './indexes';
+import { v4 as uuidv4 } from 'uuid';
+import { PostgresEngine, Column } from './engine';
 
 const PostgresRetrieverOptionsSchema = CommonRetrieverOptionsSchema.extend({
   k: z.number().max(1000),
-  filter: z.string().optional(),
+  filter: z.record(z.string(), z.any()).optional(),
 });
 
-const PostgresIndexerOptionsSchema = z.object({});
+const PostgresIndexerOptionsSchema = z.object({
+  batchSize: z.number().default(100),
+});
 
 /**
  * postgresRetrieverRef function creates a retriever for Postgres.
@@ -82,7 +84,7 @@ export const postgresIndexerRef = (params: {
  */
 export function postgres<EmbedderCustomOptions extends z.ZodTypeAny>(
   params: {
-    tableName: string;
+    tableName: string,
     embedder: EmbedderArgument<EmbedderCustomOptions>;
     embedderOptions?: z.infer<EmbedderCustomOptions>;
     engine: PostgresEngine;
@@ -90,16 +92,15 @@ export function postgres<EmbedderCustomOptions extends z.ZodTypeAny>(
     contentColumn?: string;
     embeddingColumn?: string;
     metadataColumns?: string[];
-    ignoreMetaDataColumns?: string[];
+    ignoreMetadataColumns?: string[];
     idColumn?: string;
     metadataJsonColumn?: string;
-    distanceStrategy?: DistanceStrategy;
-    indexQueryOptions?: QueryOptions;
+    distanceStrategy?: 'cosine' | 'ip' | 'l2';
   }[]
 ): GenkitPlugin {
   return genkitPlugin('postgres', async (ai: Genkit) => {
-    params.map(i => configurePostgresRetriever(ai, i));
-    params.map(i => configurePostgresIndexer(ai, i));
+    params.map((i) => configurePostgresRetriever(ai, i));
+    params.map((i) => configurePostgresIndexer(ai, i));
   });
 }
 
@@ -114,7 +115,7 @@ export default postgres;
  * @param params.embedderOptions  Options to customize the embedder
  * @returns A Postgres retriever
  */
-export async function configurePostgresRetriever<
+export function configurePostgresRetriever<
   EmbedderCustomOptions extends z.ZodTypeAny,
 >(
   ai: Genkit,
@@ -122,133 +123,8 @@ export async function configurePostgresRetriever<
     tableName: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
     embedderOptions?: z.infer<EmbedderCustomOptions>;
-    engine: PostgresEngine;
-    schemaName?: string;
-    contentColumn?: string;
-    embeddingColumn?: string;
-    metadataColumns?: string[];
-    ignoreMetadataColumns?: string[];
-    idColumn?: string;
-    metadataJsonColumn?: string;
-    distanceStrategy?: DistanceStrategy;
-    indexQueryOptions?: QueryOptions;
   }
 ) {
-  const schemaName = params.schemaName ?? 'public';
-  const contentColumn = params.contentColumn ?? 'content';
-  const embeddingColumn = params.embeddingColumn ?? 'embedding';
-  const distanceStrategy =
-    params.distanceStrategy ?? DistanceStrategy.COSINE_DISTANCE;
-  if (!params.engine) {
-    throw new Error('Engine is required');
-  }
-
-  async function checkColumns() {
-    if (
-      params.metadataColumns !== undefined &&
-      params.ignoreMetadataColumns !== undefined
-    ) {
-      throw 'Can not use both metadata_columns and ignore_metadata_columns.';
-    }
-
-    const { rows } = await params.engine.pool.raw(
-      `SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '${params.tableName}' AND table_schema = '${schemaName}'`
-    );
-    const columns: { [key: string]: any } = {};
-
-    for (const index in rows) {
-      const row = rows[index];
-      columns[row['column_name']] = row['data_type'];
-    }
-
-    if (params.idColumn && !columns.hasOwnProperty(params.idColumn)) {
-      throw `Id column: ${params.idColumn}, does not exist.`;
-    }
-
-    if (contentColumn && !columns.hasOwnProperty(contentColumn)) {
-      throw `Content column: ${params.contentColumn}, does not exist.`;
-    }
-
-    const contentType = contentColumn ? columns[contentColumn] : '';
-
-    if (contentType !== 'text' && !contentType.includes('char')) {
-      throw `Content column: ${contentColumn}, is type: ${contentType}. It must be a type of character string.`;
-    }
-
-    if (embeddingColumn && !columns.hasOwnProperty(embeddingColumn)) {
-      throw `Embedding column: ${embeddingColumn}, does not exist.`;
-    }
-
-    if (embeddingColumn && columns[embeddingColumn] !== 'USER-DEFINED') {
-      throw `Embedding column: ${embeddingColumn} is not of type Vector.`;
-    }
-
-    const metadataJsonColumnToCheck = params.metadataJsonColumn ?? '';
-    params.metadataJsonColumn = columns.hasOwnProperty(
-      metadataJsonColumnToCheck
-    )
-      ? params.metadataJsonColumn
-      : '';
-
-    if (params.metadataColumns) {
-      for (const column of params.metadataColumns) {
-        if (column && !columns.hasOwnProperty(column)) {
-          throw `Metadata column: ${column}, does not exist.`;
-        }
-      }
-    }
-
-    const allColumns = columns;
-    if (
-      params.ignoreMetadataColumns !== undefined &&
-      params.ignoreMetadataColumns.length > 0
-    ) {
-      for (const column of params.ignoreMetadataColumns) {
-        delete allColumns[column];
-      }
-
-      if (params.idColumn) {
-        delete allColumns[params.idColumn];
-      }
-      if (contentColumn) {
-        delete allColumns[contentColumn];
-      }
-      if (embeddingColumn) {
-        delete allColumns[embeddingColumn];
-      }
-      params.metadataColumns = Object.keys(allColumns);
-    }
-  }
-
-  async function queryCollection(
-    embedding: number[],
-    k?: number | undefined,
-    filter?: string | undefined
-  ) {
-    k = k ?? 4;
-    const operator = distanceStrategy.operator;
-    const searchFunction = distanceStrategy.searchFunction;
-    const _filter = filter !== undefined ? `WHERE ${filter}` : '';
-    const metadataColNames =
-      params.metadataColumns && params.metadataColumns.length > 0
-        ? `"${params.metadataColumns.join('","')}"`
-        : '';
-    const metadataJsonColName = params.metadataJsonColumn
-      ? `, "${params.metadataJsonColumn}"`
-      : '';
-
-    const query = `SELECT "${params.idColumn}", "${contentColumn}", "${embeddingColumn}", ${metadataColNames} ${metadataJsonColName}, ${searchFunction}("${embeddingColumn}", '[${embedding}]') as distance FROM "${schemaName}"."${params.tableName}" ${_filter} ORDER BY "${embeddingColumn}" ${operator} '[${embedding}]' LIMIT ${k};`;
-
-    if (params.indexQueryOptions) {
-      await params.engine.pool.raw(
-        `SET LOCAL ${params.indexQueryOptions.to_string()}`
-      );
-    }
-
-    const { rows } = await params.engine.pool.raw(query);
-
-    return rows;
-  }
 
   return ai.defineRetriever(
     {
@@ -256,39 +132,11 @@ export async function configurePostgresRetriever<
       configSchema: PostgresRetrieverOptionsSchema,
     },
     async (content, options) => {
+      // Add logic for handling content and options here
       console.log(`Retrieving data for table: ${params.tableName}`);
-      checkColumns();
-      const queryEmbeddings = await ai.embed({
-        embedder: params.embedder,
-        content,
-        options: params.embedderOptions,
-      });
-      const embedding = queryEmbeddings[0].embedding;
-      const results = await queryCollection(
-        embedding,
-        options.k,
-        options.filter
-      );
-      const documents: Document[] = [];
-      for (const row of results) {
-        const metadata =
-          params.metadataJsonColumn && row[params.metadataJsonColumn]
-            ? row[params.metadataJsonColumn]
-            : {};
-        if (params.metadataColumns) {
-          for (const col of params.metadataColumns) {
-            metadata[col] = row[col];
-          }
-        }
-        documents.push(
-          new Document({
-            content: row[contentColumn],
-            metadata: metadata,
-          })
-        );
-      }
-
-      return { documents };
+      return {
+        documents: [], // Return appropriate documents based on your logic
+      };
     }
   );
 }
@@ -298,9 +146,18 @@ export async function configurePostgresRetriever<
  * @param ai A Genkit instance
  * @param params The params for the indexer
  * @param params.tableName The name of the indexer
+ * @param params.engine The engine to use for the indexer
  * @param params.embedder The embedder to use for the retriever
  * @param params.embedderOptions  Options to customize the embedder
- * @returns A Genkit indexer
+ * @param params.metadataColumns The metadata columns to use for the indexer
+ * @param params.idColumn The id column to use for the indexer
+ * @param params.metadataJsonColumn The metadata json column to use for the indexer
+ * @param params.distanceStrategy The distance strategy to use for the indexer
+ * @param params.contentColumn The content column to use for the indexer
+ * @param params.embeddingColumn The embedding column to use for the indexer
+ * @param params.schemaName The schema name to use for the indexer
+ * @param params.chunkSize The chunk size to use for the indexer
+ * @returns Add documents to vector store
  */
 export function configurePostgresIndexer<
   EmbedderCustomOptions extends z.ZodTypeAny,
@@ -308,24 +165,173 @@ export function configurePostgresIndexer<
   ai: Genkit,
   params: {
     tableName: string;
+    engine: PostgresEngine;
+    schemaName?: string;
+    contentColumn?: string;
+    embeddingColumn?: string;
+    metadataColumns?: string[];
+    ignoreMetadataColumns?: string[];
+    idColumn?: string;
+    metadataJsonColumn?: string;
     embedder: EmbedderArgument<EmbedderCustomOptions>;
     embedderOptions?: z.infer<EmbedderCustomOptions>;
   }
 ) {
+  if (!params.engine) {
+    throw new Error('Engine is required');
+  }
+
+  if (params.metadataColumns && params.ignoreMetadataColumns) {
+    throw new Error('Cannot use both metadataColumns and ignoreMetadataColumns');
+  }
+
+  const {
+    tableName,
+    engine,
+    schemaName,
+    contentColumn,
+    embeddingColumn,
+    metadataColumns,
+    ignoreMetadataColumns,
+    idColumn,
+    metadataJsonColumn,
+    embedder,
+    embedderOptions
+  } = params;
+
+  // Store the final metadata columns at the module level
+  let finalMetadataColumns: string[] = metadataColumns || [];
+
+  async function ensureTableExists() {
+    // Get existing columns and their types if table exists
+    const { rows } = await engine.pool.raw(
+      `SELECT column_name, data_type, is_nullable 
+       FROM information_schema.columns 
+       WHERE table_name = '${tableName}' AND table_schema = '${schemaName || 'public'}'`
+    );
+    
+    if (rows.length === 0) {
+      throw new Error(`Table ${schemaName || 'public'}.${tableName} does not exist. Please create it using initVectorstoreTable first.`);
+    }
+
+    const existingColumns = rows.map(row => row.column_name);
+    const requiredColumns = [
+      idColumn || 'id',
+      contentColumn || 'content',
+      embeddingColumn || 'embedding'
+    ];
+
+    const missingColumns = requiredColumns.filter(col => !existingColumns.includes(col));
+    if (missingColumns.length > 0) {
+      throw new Error(`Missing required columns: ${missingColumns.join(', ')}`);
+    }
+
+    const columnTypes = rows.reduce((acc, row) => {
+      acc[row.column_name] = row.data_type;
+      return acc;
+    }, {} as Record<string, string>);
+
+    // Check content column is text type
+    if (columnTypes[contentColumn || 'content'] !== 'text') {
+      throw new Error(`Content column must be of type 'text', found '${columnTypes[contentColumn || 'content']}'`);
+    }
+
+    // Check embedding column is vector type
+    if (columnTypes[embeddingColumn || 'embedding'] !== 'USER-DEFINED') {
+      throw new Error(`Embedding column must be of type 'vector', found '${columnTypes[embeddingColumn || 'embedding']}'`);
+    }
+
+    // Check id column exists and is a string type
+    const idColumnType = columnTypes[idColumn || 'id'];
+    if (!idColumnType || !['text', 'character varying', 'varchar', 'uuid'].includes(idColumnType)) {
+      throw new Error(`ID column must be a string type (text, varchar, or uuid), found '${idColumnType}'`);
+    }
+
+    if (ignoreMetadataColumns && ignoreMetadataColumns.length > 0) {
+      finalMetadataColumns = existingColumns.filter(col => 
+        !ignoreMetadataColumns.includes(col) && 
+        !requiredColumns.includes(col) &&
+        col !== metadataJsonColumn
+      );
+    }
+  }
+
+  async function generateEmbeddings(documents: Document[], options?: { batchSize?: number }): Promise<IndexedDocument[]> {
+    const CHUNK_SIZE = options?.batchSize || 100;
+    const results: IndexedDocument[] = [];
+    
+    for (let i = 0; i < documents.length; i += CHUNK_SIZE) {
+      const chunk = documents.slice(i, i + CHUNK_SIZE);
+      try {
+        // Single batch call for all documents in the chunk
+        const batchEmbeddings = await ai.embedMany({
+          embedder,
+          content: chunk,
+          options: embedderOptions
+        });
+        
+        const chunkResults = chunk.map((doc, index) => ({
+          id: doc.metadata?.[idColumn || 'id'] as string || uuidv4(),
+          content: typeof doc.content === 'string' ? doc.content : JSON.stringify(doc.content),
+          embedding: JSON.stringify(batchEmbeddings[index].embedding),
+          metadata: doc.metadata || {}
+        }));
+        
+        results.push(...chunkResults);
+      } catch (error) {
+        throw new Error('Embedding failed');
+      }
+    }
+    
+    return results;
+  }
+
   return ai.defineIndexer(
     {
       name: `postgres/${params.tableName}`,
       configSchema: PostgresIndexerOptionsSchema.optional(),
     },
-    async (documents, options) => {
-      // Implement your indexing logic here
-      console.log(
-        `Indexing data for table: ${params.tableName}`,
-        documents,
-        options
-      );
-      // You'll likely need to interact with your PostgresEngine here
-      // to insert embeddings into your table.
+    async (docs, options) => {
+      await ensureTableExists();
+      
+      try {
+        const vectors = await generateEmbeddings(docs, options);
+        const batchSize = options?.batchSize || 100;
+
+        for (let i = 0; i < vectors.length; i += batchSize) {
+          const batch = vectors.slice(i, i + batchSize);
+          
+          const insertData = batch.map(doc => {
+            const metadata = doc.metadata || {};
+            return {
+              [idColumn || 'id']: doc.id,
+              [contentColumn || 'content']: doc.content,
+              [embeddingColumn || 'embedding']: doc.embedding,
+              ...(metadataJsonColumn && { [metadataJsonColumn]: metadata }),
+              ...Object.fromEntries(
+                finalMetadataColumns
+                  .filter(col => metadata[col] !== undefined)
+                  .map(col => [col, metadata[col]])
+              )
+            };
+          });
+
+          const table = schemaName 
+            ? engine.pool.withSchema(schemaName).table(tableName)
+            : engine.pool.table(tableName);
+
+          await table.insert(insertData);
+        }
+      } catch (error) {
+        throw error;
+      }
     }
   );
+}
+
+interface IndexedDocument {
+  id: string;
+  content: string;
+  embedding: string;
+  metadata: Record<string, unknown>;
 }
