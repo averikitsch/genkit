@@ -7,8 +7,22 @@ npm i --save @genkit-ai/cloud-sql-pg
 ```
 
 ## Using the plugin
-Indexer usage
 
+### Initialize the Postgres engine
+```ts
+import { PostgresEngine } from '@genkit-ai/cloud-sql-pg';
+
+// Initialize the engine
+const engine = new PostgresEngine({
+  host: 'localhost',
+  user: 'postgres',
+  password: 'your-password',
+  database: 'mydb',
+  port: 5432
+});
+```
+
+### Indexer usage
 ```ts
 import { genkit } from 'genkit';
 import {

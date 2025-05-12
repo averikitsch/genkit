@@ -80,7 +80,7 @@ export const postgresIndexerRef = (params: {
  * @param params An array of params to set up Postgres retrievers and indexers
  * @param params.tableName The name of the table
  * @param params.embedder The embedder to use for the indexer and retriever
- * @param params.embedderOptions  Options to customize the embedder
+ * @param params.embedderOptions Options to customize the embedder
  * @returns The Postgres Genkit plugin
  */
 export function postgres<EmbedderCustomOptions extends z.ZodTypeAny>(
@@ -96,7 +96,6 @@ export function postgres<EmbedderCustomOptions extends z.ZodTypeAny>(
     ignoreMetadataColumns?: string[];
     idColumn?: string;
     metadataJsonColumn?: string;
-    ignoreMetaDataColumns?: string[];
     distanceStrategy?: DistanceStrategy;
     indexQueryOptions?: QueryOptions;
   }[]
