@@ -39,7 +39,6 @@
     "uuid": "^11.1.0"
   },
   "peerDependencies": {
-    "@genkit-ai/core": "workspace:^",
     "genkit": "workspace:^"
   },
   "devDependencies": {
