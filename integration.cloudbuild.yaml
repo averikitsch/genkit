@@ -39,10 +39,9 @@ steps:
       - |
         npm install -g pnpm
         pnpm install
-        pnpm build:libs
-        pnpm link ./js/genkit
         cd plugins/cloud-sql-pg
         pnpm install
+        pnpm install genkit
         /workspace/cloud-sql-proxy ${_INSTANCE_CONNECTION_NAME} --port $_DATABASE_PORT  & sleep 2;
         pnpm test
 
