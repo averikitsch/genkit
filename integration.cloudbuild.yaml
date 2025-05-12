@@ -26,6 +26,7 @@ steps:
   - id: Run integration tests
     name: node:${_VERSION}
     entrypoint: /bin/bash
+    dir: js
     env:
       - "PROJECT_ID=$PROJECT_ID"
       - "INSTANCE_ID=$_INSTANCE_ID"
@@ -37,9 +38,10 @@ steps:
       - "-c"
       - |
         npm install -g pnpm
-        pnpm link ./js/genkit
         pnpm install
-        cd js/plugins/cloud-sql-pg
+        pnpm build:core
+        pnpm link ./js/genkit
+        cd plugins/cloud-sql-pg
         pnpm install
         /workspace/cloud-sql-proxy ${_INSTANCE_CONNECTION_NAME} --port $_DATABASE_PORT  & sleep 2;
         pnpm test
