@@ -39,7 +39,7 @@ steps:
       - |
         npm install -g pnpm
         pnpm install
-        pnpm build:core
+        pnpm build:libs
         pnpm link ./js/genkit
         cd plugins/cloud-sql-pg
         pnpm install
