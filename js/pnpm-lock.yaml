@@ -305,6 +305,9 @@ importers:
 
   plugins/cloud-sql-pg:
     dependencies:
+      '@genkit-ai/core':
+        specifier: workspace:^
+        version: link:../../core
       '@google-cloud/cloud-sql-connector':
         specifier: ^1.6.0
         version: 1.8.0(encoding@0.1.13)
