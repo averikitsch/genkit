@@ -7,7 +7,7 @@ import (
 )
 
 type docStore struct {
-	engine PostgresEngine
+	engine *PostgresEngine
 	config *Config
 }
 
@@ -114,7 +114,8 @@ func (ds *docStore) validateConfiguration(ctx context.Context) error {
 		}
 
 		var filteredColumns []string
-		for _, col := range mapColumnNameDataType {
+
+		for col, _ := range mapColumnNameDataType {
 			filteredColumns = append(filteredColumns, col)
 		}
 		ds.config.MetadataColumns = filteredColumns
